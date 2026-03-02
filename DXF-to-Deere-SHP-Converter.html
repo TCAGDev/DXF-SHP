@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DXF → Deere SHP Converter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #0c0f14;
+    --surface: #151921;
+    --surface2: #1c2230;
+    --border: #2a3040;
+    --border-active: #4a7c59;
+    --text: #e8eaed;
+    --text-dim: #8b92a0;
+    --text-muted: #5a6270;
+    --accent: #4a7c59;
+    --accent-light: #5d9e6f;
+    --accent-glow: rgba(74, 124, 89, 0.15);
+    --error: #c44040;
+    --error-glow: rgba(196, 64, 64, 0.1);
+    --warn: #c49040;
+    --success: #4a7c59;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .noise-overlay {
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 0;
+  }
+
+  .app-container {
+    position: relative; z-index: 1;
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* Header */
+  .header {
+    margin-bottom: 48px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+  }
+  .header-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--accent-glow);
+    border: 1px solid rgba(74, 124, 89, 0.3);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--accent-light);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .header-badge svg { width: 14px; height: 14px; }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    margin-bottom: 8px;
+  }
+  .header h1 span { color: var(--accent-light); }
+  .header p {
+    font-size: 14px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  /* Sections */
+  .section {
+    margin-bottom: 32px;
+  }
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+  }
+
+  /* File drop zone */
+  .drop-zone {
+    border: 1.5px dashed var(--border);
+    border-radius: 12px;
+    padding: 36px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--surface);
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+  }
+  .drop-zone.has-file {
+    border-color: var(--accent);
+    border-style: solid;
+    background: var(--accent-glow);
+  }
+  .drop-zone input { display: none; }
+  .drop-icon {
+    width: 40px; height: 40px;
+    margin: 0 auto 12px;
+    color: var(--text-muted);
+    transition: color 0.2s;
+  }
+  .drop-zone:hover .drop-icon,
+  .drop-zone.has-file .drop-icon { color: var(--accent-light); }
+  .drop-text {
+    font-size: 14px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .drop-text strong { color: var(--accent-light); font-weight: 500; }
+  .file-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+  }
+  .file-info .fname {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .file-info .fsize {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* Form fields */
+  .field-group {
+    display: grid;
+    gap: 12px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .field label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+  }
+  .field input, .field select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .field input:focus, .field select:focus {
+    border-color: var(--accent);
+  }
+  .field input::placeholder { color: var(--text-muted); }
+  .field select { cursor: pointer; }
+  .field select option { background: var(--surface2); }
+
+  /* Preview panel */
+  .preview-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .preview-body {
+    padding: 18px;
+  }
+  .preview-canvas-wrap {
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 8px;
+    margin-bottom: 16px;
+    position: relative;
+    aspect-ratio: 16/10;
+  }
+  .preview-canvas-wrap canvas {
+    width: 100%; height: 100%;
+    display: block;
+  }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .stat {
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .stat-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 2px;
+  }
+  .stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* Detected info badges */
+  .detected-info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .det-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .det-badge.ok {
+    background: rgba(74, 124, 89, 0.12);
+    color: var(--accent-light);
+    border: 1px solid rgba(74, 124, 89, 0.25);
+  }
+  .det-badge.warn {
+    background: rgba(196, 144, 64, 0.1);
+    color: var(--warn);
+    border: 1px solid rgba(196, 144, 64, 0.25);
+  }
+
+  /* Convert button */
+  .convert-btn {
+    width: 100%;
+    padding: 14px 24px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: white;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.01em;
+    position: relative;
+    overflow: hidden;
+  }
+  .convert-btn:hover:not(:disabled) {
+    background: var(--accent-light);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 20px rgba(74, 124, 89, 0.3);
+  }
+  .convert-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .convert-btn:active:not(:disabled) { transform: translateY(0); }
+
+  /* Log console */
+  .log-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-top: 24px;
+  }
+  .log-header {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .log-body {
+    padding: 14px 18px;
+    max-height: 220px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.8;
+  }
+  .log-body::-webkit-scrollbar { width: 4px; }
+  .log-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .log-line { color: var(--text-dim); }
+  .log-line.ok { color: var(--accent-light); }
+  .log-line.err { color: var(--error); }
+  .log-line.warn { color: var(--warn); }
+  .log-line .ts { color: var(--text-muted); margin-right: 8px; }
+
+  /* Responsive */
+  @media (max-width: 500px) {
+    .app-container { padding: 24px 16px 60px; }
+    .header h1 { font-size: 22px; }
+    .stat-grid { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* Animations */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .section { animation: fadeIn 0.4s ease both; }
+  .section:nth-child(2) { animation-delay: 0.05s; }
+  .section:nth-child(3) { animation-delay: 0.1s; }
+  .section:nth-child(4) { animation-delay: 0.15s; }
+  .section:nth-child(5) { animation-delay: 0.2s; }
+
+  /* Pulse dot for log */
+  .pulse-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+</style>
+</head>
+<body>
+<div class="noise-overlay"></div>
+<div class="app-container">
+
+  <div class="header">
+    <div class="header-badge">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      Field Boundary Tool
+    </div>
+    <h1>DXF → <span>Deere SHP</span></h1>
+    <p>Convert DXF field boundaries to John Deere Operations Center compatible shapefiles. Handles CRS reprojection, Z-flattening, and generates separate shapefiles per polygon.</p>
+  </div>
+
+  <!-- File Input -->
+  <div class="section">
+    <div class="section-label">Source File</div>
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".dxf">
+      <div id="dropContent">
+        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/>
+        </svg>
+        <div class="drop-text">Drop <strong>.dxf</strong> file here or click to browse</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CRS Selection -->
+  <div class="section">
+    <div class="section-label">Coordinate Reference System</div>
+    <div class="field-group">
+      <div class="field">
+        <label>Source CRS (of the DXF)</label>
+        <select id="sourceCrs">
+          <option value="auto">Auto-detect from coordinates</option>
+          <option value="EPSG:28349">MGA Zone 49 (EPSG:28349)</option>
+          <option value="EPSG:28350">MGA Zone 50 (EPSG:28350)</option>
+          <option value="EPSG:28351">MGA Zone 51 (EPSG:28351)</option>
+          <option value="EPSG:28352">MGA Zone 52 (EPSG:28352)</option>
+          <option value="EPSG:28353">MGA Zone 53 (EPSG:28353)</option>
+          <option value="EPSG:28354">MGA Zone 54 (EPSG:28354)</option>
+          <option value="EPSG:28355">MGA Zone 55 (EPSG:28355)</option>
+          <option value="EPSG:28356">MGA Zone 56 (EPSG:28356)</option>
+          <option value="EPSG:28357">MGA Zone 57 (EPSG:28357)</option>
+          <option value="EPSG:28358">MGA Zone 58 (EPSG:28358)</option>
+          <option value="EPSG:7849">GDA2020 / MGA Zone 49 (EPSG:7849)</option>
+          <option value="EPSG:7850">GDA2020 / MGA Zone 50 (EPSG:7850)</option>
+          <option value="EPSG:7851">GDA2020 / MGA Zone 51 (EPSG:7851)</option>
+          <option value="EPSG:7852">GDA2020 / MGA Zone 52 (EPSG:7852)</option>
+          <option value="EPSG:7853">GDA2020 / MGA Zone 53 (EPSG:7853)</option>
+          <option value="EPSG:7854">GDA2020 / MGA Zone 54 (EPSG:7854)</option>
+          <option value="EPSG:7855">GDA2020 / MGA Zone 55 (EPSG:7855)</option>
+          <option value="EPSG:7856">GDA2020 / MGA Zone 56 (EPSG:7856)</option>
+          <option value="EPSG:7857">GDA2020 / MGA Zone 57 (EPSG:7857)</option>
+          <option value="EPSG:7858">GDA2020 / MGA Zone 58 (EPSG:7858)</option>
+          <option value="EPSG:4326">WGS 84 Geographic (already lat/lon)</option>
+          <option value="EPSG:4283">GDA94 Geographic (already lat/lon)</option>
+          <option value="EPSG:7844">GDA2020 Geographic (already lat/lon)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metadata -->
+  <div class="section">
+    <div class="section-label">Deere Metadata</div>
+    <div class="field-group">
+      <div class="field">
+        <label>Client Name</label>
+        <input type="text" id="clientName" placeholder="e.g. RobsonCivil">
+      </div>
+      <div class="field">
+        <label>Farm Name</label>
+        <input type="text" id="farmName" placeholder="e.g. Muswellbrook">
+      </div>
+      <div class="field">
+        <label>Field Name Prefix</label>
+        <input type="text" id="fieldPrefix" placeholder="e.g. Pasture Slash">
+      </div>
+    </div>
+    <p style="font-size:11px;color:var(--text-muted);margin-top:8px;">Fields will be numbered automatically: Prefix 1, Prefix 2, etc.</p>
+  </div>
+
+  <!-- Preview -->
+  <div class="section" id="previewSection" style="display:none;">
+    <div class="preview-panel">
+      <div class="preview-header">
+        <span>DXF Preview</span>
+        <span id="polyCount"></span>
+      </div>
+      <div class="preview-body">
+        <div class="preview-canvas-wrap">
+          <canvas id="previewCanvas"></canvas>
+        </div>
+        <div class="stat-grid" id="statGrid"></div>
+        <div class="detected-info" id="detectedInfo"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Convert -->
+  <div class="section">
+    <button class="convert-btn" id="convertBtn" disabled>Convert & Download</button>
+  </div>
+
+  <!-- Log -->
+  <div class="log-panel" id="logPanel" style="display:none;">
+    <div class="log-header">
+      <div class="pulse-dot"></div>
+      Conversion Log
+    </div>
+    <div class="log-body" id="logBody"></div>
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+// PROJ4 DEFINITIONS
+// ============================================================
+// GDA94 MGA Zones
+proj4.defs("EPSG:28349","+proj=utm +zone=49 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28350","+proj=utm +zone=50 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28351","+proj=utm +zone=51 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28352","+proj=utm +zone=52 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28353","+proj=utm +zone=53 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28354","+proj=utm +zone=54 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28355","+proj=utm +zone=55 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28356","+proj=utm +zone=56 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28357","+proj=utm +zone=57 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:28358","+proj=utm +zone=58 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+// GDA2020 MGA Zones
+proj4.defs("EPSG:7849","+proj=utm +zone=49 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7850","+proj=utm +zone=50 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7851","+proj=utm +zone=51 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7852","+proj=utm +zone=52 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7853","+proj=utm +zone=53 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7854","+proj=utm +zone=54 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7855","+proj=utm +zone=55 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7856","+proj=utm +zone=56 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7857","+proj=utm +zone=57 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+proj4.defs("EPSG:7858","+proj=utm +zone=58 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+// Geographic
+proj4.defs("EPSG:4283","+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs");
+proj4.defs("EPSG:7844","+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs");
+
+// ============================================================
+// STATE
+// ============================================================
+let parsedPolygons = [];
+let detectedCRS = null;
+let dxfFileName = '';
+
+// ============================================================
+// DXF PARSER
+// ============================================================
+function parseDXF(text) {
+  const lines = text.split(/\r?\n/);
+  const pairs = [];
+  for (let i = 0; i < lines.length - 1; i += 2) {
+    pairs.push({ code: parseInt(lines[i].trim(), 10), value: lines[i + 1]?.trim() || '' });
+  }
+
+  // Find ENTITIES section
+  let entStart = -1, entEnd = -1;
+  for (let i = 0; i < pairs.length; i++) {
+    if (pairs[i].code === 2 && pairs[i].value === 'ENTITIES') entStart = i;
+    if (entStart >= 0 && pairs[i].code === 0 && pairs[i].value === 'ENDSEC') { entEnd = i; break; }
+  }
+  if (entStart < 0) throw new Error('No ENTITIES section found in DXF');
+
+  const polygons = [];
+  let i = entStart;
+
+  while (i < entEnd) {
+    if (pairs[i].code === 0) {
+      const etype = pairs[i].value;
+
+      // LWPOLYLINE
+      if (etype === 'LWPOLYLINE') {
+        const poly = parseLWPolyline(pairs, i, entEnd);
+        if (poly) { polygons.push(poly); i = poly._endIdx; continue; }
+      }
+
+      // POLYLINE (classic with VERTEX/SEQEND)
+      if (etype === 'POLYLINE') {
+        const poly = parsePolyline(pairs, i, entEnd);
+        if (poly) { polygons.push(poly); i = poly._endIdx; continue; }
+      }
+
+      // LINE
+      if (etype === 'LINE') {
+        // Collect but skip — lines aren't polygons
+      }
+    }
+    i++;
+  }
+
+  return polygons;
+}
+
+function parseLWPolyline(pairs, startIdx, endIdx) {
+  let i = startIdx + 1;
+  let layer = '0';
+  let closed = false;
+  const points = [];
+  let cx = null, cy = null;
+
+  while (i < endIdx && !(pairs[i].code === 0)) {
+    const c = pairs[i].code, v = pairs[i].value;
+    if (c === 8) layer = v;
+    if (c === 70) closed = (parseInt(v) & 1) === 1;
+    if (c === 10) {
+      if (cx !== null) points.push({ x: cx, y: cy, z: 0 });
+      cx = parseFloat(v);
+    }
+    if (c === 20) cy = parseFloat(v);
+    i++;
+  }
+  if (cx !== null) points.push({ x: cx, y: cy, z: 0 });
+
+  // Close if needed
+  if (points.length >= 3) {
+    const f = points[0], l = points[points.length - 1];
+    if (f.x !== l.x || f.y !== l.y) {
+      if (closed) points.push({ ...f });
+    }
+  }
+
+  if (points.length < 4) return null; // Need at least 3 unique + closure
+  return { layer, points, closed: true, _endIdx: i };
+}
+
+function parsePolyline(pairs, startIdx, endIdx) {
+  let i = startIdx + 1;
+  let layer = '0';
+  let flags = 0;
+  const points = [];
+
+  // Read POLYLINE header
+  while (i < endIdx && !(pairs[i].code === 0)) {
+    if (pairs[i].code === 8) layer = pairs[i].value;
+    if (pairs[i].code === 70) flags = parseInt(pairs[i].value);
+    i++;
+  }
+
+  // Read VERTEXes until SEQEND
+  while (i < endIdx) {
+    if (pairs[i].code === 0 && pairs[i].value === 'SEQEND') { i++; break; }
+    if (pairs[i].code === 0 && pairs[i].value === 'VERTEX') {
+      i++;
+      let vx = 0, vy = 0, vz = 0;
+      while (i < endIdx && !(pairs[i].code === 0)) {
+        if (pairs[i].code === 10) vx = parseFloat(pairs[i].value);
+        if (pairs[i].code === 20) vy = parseFloat(pairs[i].value);
+        if (pairs[i].code === 30) vz = parseFloat(pairs[i].value);
+        i++;
+      }
+      points.push({ x: vx, y: vy, z: vz });
+      continue;
+    }
+    i++;
+  }
+
+  // Ensure closure
+  if (points.length >= 3) {
+    const f = points[0], l = points[points.length - 1];
+    if (f.x !== l.x || f.y !== l.y) {
+      points.push({ ...f });
+    }
+  }
+
+  if (points.length < 4) return null;
+  return { layer, points, closed: true, _endIdx: i };
+}
+
+// ============================================================
+// CRS AUTO-DETECT
+// ============================================================
+function autoDetectCRS(polygons) {
+  // Gather all X coords
+  const allX = polygons.flatMap(p => p.points.map(pt => pt.x));
+  const allY = polygons.flatMap(p => p.points.map(pt => pt.y));
+  const avgX = allX.reduce((a, b) => a + b, 0) / allX.length;
+  const avgY = allY.reduce((a, b) => a + b, 0) / allY.length;
+
+  // If coords look like lat/lon
+  if (Math.abs(avgX) <= 180 && Math.abs(avgY) <= 90) {
+    return { epsg: 'EPSG:4326', label: 'WGS 84 (already geographic)', needsReproject: false };
+  }
+
+  // MGA zone detection: easting is typically 100000-900000, northing is large
+  if (avgY > 1000000) {
+    // UTM/MGA — detect zone from easting central meridian
+    // MGA zones for Australia: 49-58, central meridians: 111,117,123,...,165
+    // Easting offset is 500000 from central meridian
+    // We can estimate zone from longitude after rough inverse
+    // But simpler: in Australia Y (northing) is typically 5.8M-8M for southern hemisphere
+    // Zone can be guessed from X range — but really we need the user or a smarter heuristic
+
+    // For Australian MGA, eastings cluster around 200k-800k
+    // We'll try each zone and see which gives plausible Australian coordinates
+    const candidateZones = [];
+    for (let zone = 49; zone <= 58; zone++) {
+      const epsgGDA94 = `EPSG:283${zone}`;
+      const epsgGDA2020 = `EPSG:78${zone < 50 ? '49' : (48 + zone - 48)}`;
+      try {
+        const [lon, lat] = proj4(epsgGDA94, 'EPSG:4326', [avgX, avgY]);
+        if (lon >= 110 && lon <= 155 && lat >= -45 && lat <= -10) {
+          candidateZones.push({ epsg: epsgGDA94, zone, datum: 'GDA94', lon, lat });
+        }
+      } catch(e) {}
+    }
+
+    // GDA2020 candidates
+    for (let zone = 49; zone <= 58; zone++) {
+      const epsg = `EPSG:78${zone}`;
+      try {
+        const [lon, lat] = proj4(epsg, 'EPSG:4326', [avgX, avgY]);
+        if (lon >= 110 && lon <= 155 && lat >= -45 && lat <= -10) {
+          candidateZones.push({ epsg, zone, datum: 'GDA2020', lon, lat });
+        }
+      } catch(e) {}
+    }
+
+    if (candidateZones.length > 0) {
+      // Prefer GDA94 as most common for older survey data
+      const gda94 = candidateZones.find(c => c.datum === 'GDA94');
+      const pick = gda94 || candidateZones[0];
+      return {
+        epsg: pick.epsg,
+        label: `${pick.datum} / MGA Zone ${pick.zone}`,
+        needsReproject: true,
+        testLon: pick.lon,
+        testLat: pick.lat
+      };
+    }
+  }
+
+  return { epsg: null, label: 'Unknown — please select manually', needsReproject: true };
+}
+
+// ============================================================
+// SHAPEFILE WRITER (binary, pure JS)
+// ============================================================
+function writeShapefile(polygon, fieldName, clientName, farmName) {
+  // Reproject to WGS84 if needed
+  const sourceCrsSelect = document.getElementById('sourceCrs').value;
+  const srcEpsg = sourceCrsSelect === 'auto' ? detectedCRS?.epsg : sourceCrsSelect;
+  const needsReproject = srcEpsg && srcEpsg !== 'EPSG:4326';
+
+  let points;
+  if (needsReproject && srcEpsg) {
+    points = polygon.points.map(pt => {
+      const [lon, lat] = proj4(srcEpsg, 'EPSG:4326', [pt.x, pt.y]);
+      return { x: lon, y: lat };
+    });
+  } else {
+    points = polygon.points.map(pt => ({ x: pt.x, y: pt.y }));
+  }
+
+  // Bounding box
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymin = Math.min(...ys), ymax = Math.max(...ys);
+
+  // --- SHP ---
+  const numPoints = points.length;
+  const contentLength = 4 + 4*8 + 4 + 4 + numPoints * 16; // shapeType(4) + bbox(32) + numParts(4) + parts[0](4) + points(n*16)
+  const recordLength = contentLength;
+  const fileLength = 50 + 4 + (recordLength / 2 + 4); // header(100 bytes = 50 words) + record header(8 bytes = 4 words) + content
+
+  const shpBuf = new ArrayBuffer(100 + 8 + contentLength);
+  const shpView = new DataView(shpBuf);
+
+  // SHP header
+  shpView.setInt32(0, 9994, false); // file code BE
+  shpView.setInt32(24, (100 + 8 + contentLength) / 2, false); // file length in 16-bit words BE
+  shpView.setInt32(28, 1000, true); // version LE
+  shpView.setInt32(32, 5, true); // shape type: Polygon LE
+  shpView.setFloat64(36, xmin, true);
+  shpView.setFloat64(44, ymin, true);
+  shpView.setFloat64(52, xmax, true);
+  shpView.setFloat64(60, ymax, true);
+  // Zmin, Zmax, Mmin, Mmax = 0
+  shpView.setFloat64(68, 0, true);
+  shpView.setFloat64(76, 0, true);
+  shpView.setFloat64(84, 0, true);
+  shpView.setFloat64(92, 0, true);
+
+  // Record header
+  let off = 100;
+  shpView.setInt32(off, 1, false); // record number BE
+  shpView.setInt32(off + 4, contentLength / 2, false); // content length in 16-bit words BE
+  off += 8;
+
+  // Record content
+  shpView.setInt32(off, 5, true); // shape type LE
+  off += 4;
+  shpView.setFloat64(off, xmin, true); off += 8;
+  shpView.setFloat64(off, ymin, true); off += 8;
+  shpView.setFloat64(off, xmax, true); off += 8;
+  shpView.setFloat64(off, ymax, true); off += 8;
+  shpView.setInt32(off, 1, true); off += 4; // numParts
+  shpView.setInt32(off, numPoints, true); off += 4; // numPoints
+  shpView.setInt32(off, 0, true); off += 4; // parts[0] = 0
+
+  for (const pt of points) {
+    shpView.setFloat64(off, pt.x, true); off += 8;
+    shpView.setFloat64(off, pt.y, true); off += 8;
+  }
+
+  // --- SHX ---
+  const shxBuf = new ArrayBuffer(100 + 8);
+  const shxView = new DataView(shxBuf);
+  shxView.setInt32(0, 9994, false);
+  shxView.setInt32(24, (100 + 8) / 2, false);
+  shxView.setInt32(28, 1000, true);
+  shxView.setInt32(32, 5, true);
+  shxView.setFloat64(36, xmin, true);
+  shxView.setFloat64(44, ymin, true);
+  shxView.setFloat64(52, xmax, true);
+  shxView.setFloat64(60, ymax, true);
+  shxView.setFloat64(68, 0, true);
+  shxView.setFloat64(76, 0, true);
+  shxView.setFloat64(84, 0, true);
+  shxView.setFloat64(92, 0, true);
+  // Index record
+  shxView.setInt32(100, 50, false); // offset in 16-bit words
+  shxView.setInt32(104, contentLength / 2, false);
+
+  // --- DBF ---
+  // Match the working Pasture Slash structure:
+  // LAYER C(5), GM_TYPE C(17), MAP_NAME C(19), ELEVATION N(1)
+  const fields = [
+    { name: 'LAYER', type: 'C', size: 5 },
+    { name: 'GM_TYPE', type: 'C', size: 17 },
+    { name: 'MAP_NAME', type: 'C', size: 19 },
+    { name: 'ELEVATION', type: 'N', size: 1 },
+  ];
+
+  const recordSize = 1 + fields.reduce((s, f) => s + f.size, 0); // 1 for deletion flag
+  const headerSize = 32 + fields.length * 32 + 1;
+  const dbfSize = headerSize + recordSize + 1; // +1 EOF
+
+  const dbfBuf = new ArrayBuffer(dbfSize);
+  const dbfArr = new Uint8Array(dbfBuf);
+  const dbfView = new DataView(dbfBuf);
+
+  // DBF header
+  dbfArr[0] = 3; // version
+  const now = new Date();
+  dbfArr[1] = now.getFullYear() - 1900;
+  dbfArr[2] = now.getMonth() + 1;
+  dbfArr[3] = now.getDate();
+  dbfView.setInt32(4, 1, true); // num records
+  dbfView.setInt16(8, headerSize, true);
+  dbfView.setInt16(10, recordSize, true);
+
+  // Field descriptors
+  let foff = 32;
+  for (const f of fields) {
+    const nameBytes = new TextEncoder().encode(f.name);
+    dbfArr.set(nameBytes.slice(0, 11), foff);
+    dbfArr[foff + 11] = f.type.charCodeAt(0);
+    dbfArr[foff + 16] = f.size;
+    dbfArr[foff + 17] = 0; // decimal
+    foff += 32;
+  }
+  dbfArr[foff] = 0x0D; // header terminator
+
+  // Record data
+  let roff = headerSize;
+  dbfArr[roff] = 0x20; // not deleted
+  roff++;
+
+  // LAYER = "LINES"
+  const layerVal = padRight('LINES', 5);
+  writeString(dbfArr, roff, layerVal); roff += 5;
+  // GM_TYPE = "Unknown Line Type"
+  const gmVal = padRight('Unknown Line Type', 17);
+  writeString(dbfArr, roff, gmVal); roff += 17;
+  // MAP_NAME = fieldName + ".dxf"
+  const mapVal = padRight(fieldName + '.dxf', 19);
+  writeString(dbfArr, roff, mapVal); roff += 19;
+  // ELEVATION = 0
+  const elevVal = padRight('0', 1);
+  writeString(dbfArr, roff, elevVal); roff += 1;
+
+  // EOF
+  dbfArr[roff] = 0x1A;
+
+  // --- PRJ ---
+  const prjText = 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
+
+  // --- CPG ---
+  const cpgText = 'UTF-8';
+
+  // --- Deere Metadata JSON ---
+  const metaJson = JSON.stringify({
+    Version: "1.0",
+    ClientName: clientName,
+    FarmName: farmName,
+    ShapDataType: "Boundary"
+  }, null, 2);
+
+  return {
+    shp: new Uint8Array(shpBuf),
+    shx: new Uint8Array(shxBuf),
+    dbf: new Uint8Array(dbfBuf),
+    prj: prjText,
+    cpg: cpgText,
+    meta: metaJson,
+    bbox: { xmin, ymin, xmax, ymax },
+    numPoints
+  };
+}
+
+function padRight(str, len) {
+  return (str + ' '.repeat(len)).slice(0, len);
+}
+
+function writeString(arr, offset, str) {
+  for (let i = 0; i < str.length; i++) {
+    arr[offset + i] = str.charCodeAt(i);
+  }
+}
+
+// ============================================================
+// ZIP (minimal deflate-store)
+// ============================================================
+function createZip(files) {
+  // files: [{name: string, data: Uint8Array|string}]
+  const entries = files.map(f => {
+    const data = typeof f.data === 'string' ? new TextEncoder().encode(f.data) : f.data;
+    const name = new TextEncoder().encode(f.name);
+    return { name, data, nameStr: f.name };
+  });
+
+  // Calculate sizes
+  let centralDirSize = 0;
+  let localHeadersSize = 0;
+  for (const e of entries) {
+    localHeadersSize += 30 + e.name.length + e.data.length;
+    centralDirSize += 46 + e.name.length;
+  }
+  const totalSize = localHeadersSize + centralDirSize + 22;
+  const buf = new Uint8Array(totalSize);
+  const view = new DataView(buf.buffer);
+
+  let localOff = 0;
+  const offsets = [];
+
+  // Local file headers + data
+  for (const e of entries) {
+    offsets.push(localOff);
+    const crc = crc32(e.data);
+
+    view.setUint32(localOff, 0x04034b50, true); // sig
+    view.setUint16(localOff + 4, 20, true); // version needed
+    view.setUint16(localOff + 6, 0, true); // flags
+    view.setUint16(localOff + 8, 0, true); // compression: store
+    view.setUint16(localOff + 10, 0, true); // mod time
+    view.setUint16(localOff + 12, 0, true); // mod date
+    view.setUint32(localOff + 14, crc, true);
+    view.setUint32(localOff + 18, e.data.length, true); // compressed
+    view.setUint32(localOff + 22, e.data.length, true); // uncompressed
+    view.setUint16(localOff + 26, e.name.length, true);
+    view.setUint16(localOff + 28, 0, true); // extra len
+    localOff += 30;
+    buf.set(e.name, localOff); localOff += e.name.length;
+    buf.set(e.data, localOff); localOff += e.data.length;
+  }
+
+  // Central directory
+  const centralStart = localOff;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const crc = crc32(e.data);
+    view.setUint32(localOff, 0x02014b50, true);
+    view.setUint16(localOff + 4, 20, true); // version made by
+    view.setUint16(localOff + 6, 20, true); // version needed
+    view.setUint16(localOff + 8, 0, true);
+    view.setUint16(localOff + 10, 0, true); // compression
+    view.setUint16(localOff + 12, 0, true);
+    view.setUint16(localOff + 14, 0, true);
+    view.setUint32(localOff + 16, crc, true);
+    view.setUint32(localOff + 20, e.data.length, true);
+    view.setUint32(localOff + 24, e.data.length, true);
+    view.setUint16(localOff + 28, e.name.length, true);
+    view.setUint16(localOff + 30, 0, true); // extra
+    view.setUint16(localOff + 32, 0, true); // comment
+    view.setUint16(localOff + 34, 0, true); // disk
+    view.setUint16(localOff + 36, 0, true); // internal attr
+    view.setUint32(localOff + 38, 0, true); // external attr
+    view.setUint32(localOff + 42, offsets[i], true); // local header offset
+    localOff += 46;
+    buf.set(e.name, localOff); localOff += e.name.length;
+  }
+  const centralEnd = localOff;
+
+  // End of central directory
+  view.setUint32(localOff, 0x06054b50, true);
+  view.setUint16(localOff + 4, 0, true);
+  view.setUint16(localOff + 6, 0, true);
+  view.setUint16(localOff + 8, entries.length, true);
+  view.setUint16(localOff + 10, entries.length, true);
+  view.setUint32(localOff + 12, centralEnd - centralStart, true);
+  view.setUint32(localOff + 16, centralStart, true);
+  view.setUint16(localOff + 20, 0, true);
+
+  return buf;
+}
+
+// CRC32
+function crc32(data) {
+  let crc = 0xFFFFFFFF;
+  if (!crc32.table) {
+    crc32.table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      crc32.table[i] = c;
+    }
+  }
+  for (let i = 0; i < data.length; i++) {
+    crc = crc32.table[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+// ============================================================
+// UI
+// ============================================================
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const convertBtn = document.getElementById('convertBtn');
+const logPanel = document.getElementById('logPanel');
+const logBody = document.getElementById('logBody');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+
+function handleFile(file) {
+  if (!file.name.toLowerCase().endsWith('.dxf')) {
+    alert('Please select a .dxf file');
+    return;
+  }
+  dxfFileName = file.name;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      parsedPolygons = parseDXF(reader.result);
+      if (parsedPolygons.length === 0) throw new Error('No closed polygons found in DXF');
+      detectedCRS = autoDetectCRS(parsedPolygons);
+
+      // Update UI
+      dropZone.classList.add('has-file');
+      document.getElementById('dropContent').innerHTML = `
+        <div class="file-info">
+          <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:24px;height:24px;margin:0">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <span class="fname">${file.name}</span>
+          <span class="fsize">${(file.size / 1024).toFixed(1)} KB</span>
+        </div>
+      `;
+
+      // Auto-set CRS dropdown
+      if (detectedCRS.epsg && document.getElementById('sourceCrs').value === 'auto') {
+        // Leave as auto — we'll use detected
+      }
+
+      showPreview();
+      convertBtn.disabled = false;
+    } catch (err) {
+      alert('Error parsing DXF: ' + err.message);
+      console.error(err);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function showPreview() {
+  const section = document.getElementById('previewSection');
+  section.style.display = 'block';
+  document.getElementById('polyCount').textContent = `${parsedPolygons.length} polygon${parsedPolygons.length !== 1 ? 's' : ''} found`;
+
+  // Draw preview
+  const canvas = document.getElementById('previewCanvas');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * 2;
+  canvas.height = rect.height * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(2, 2);
+  const w = rect.width, h = rect.height;
+
+  // All points for bounding
+  const allPts = parsedPolygons.flatMap(p => p.points);
+  const xmin = Math.min(...allPts.map(p => p.x));
+  const xmax = Math.max(...allPts.map(p => p.x));
+  const ymin = Math.min(...allPts.map(p => p.y));
+  const ymax = Math.max(...allPts.map(p => p.y));
+  const dx = xmax - xmin || 1, dy = ymax - ymin || 1;
+  const pad = 24;
+  const scale = Math.min((w - pad * 2) / dx, (h - pad * 2) / dy);
+  const cx = w / 2, cy = h / 2;
+  const mx = (xmin + xmax) / 2, my = (ymin + ymax) / 2;
+
+  function tx(x) { return cx + (x - mx) * scale; }
+  function ty(y) { return cy - (y - my) * scale; } // flip Y
+
+  // Grid
+  ctx.strokeStyle = 'rgba(42, 48, 64, 0.5)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const x = pad + (w - pad * 2) * i / 4;
+    ctx.beginPath(); ctx.moveTo(x, pad); ctx.lineTo(x, h - pad); ctx.stroke();
+    const y = pad + (h - pad * 2) * i / 4;
+    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y); ctx.stroke();
+  }
+
+  // Colors for multiple polygons
+  const colors = ['#5d9e6f', '#4a90c4', '#c49040', '#c44040', '#9040c4', '#40c4a0'];
+
+  parsedPolygons.forEach((poly, idx) => {
+    const col = colors[idx % colors.length];
+    // Fill
+    ctx.fillStyle = col + '18';
+    ctx.beginPath();
+    poly.points.forEach((pt, i) => {
+      if (i === 0) ctx.moveTo(tx(pt.x), ty(pt.y));
+      else ctx.lineTo(tx(pt.x), ty(pt.y));
+    });
+    ctx.closePath();
+    ctx.fill();
+
+    // Stroke
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    poly.points.forEach((pt, i) => {
+      if (i === 0) ctx.moveTo(tx(pt.x), ty(pt.y));
+      else ctx.lineTo(tx(pt.x), ty(pt.y));
+    });
+    ctx.closePath();
+    ctx.stroke();
+
+    // Vertices
+    ctx.fillStyle = col;
+    poly.points.forEach(pt => {
+      ctx.beginPath();
+      ctx.arc(tx(pt.x), ty(pt.y), 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  });
+
+  // Stats
+  const totalPts = allPts.length;
+  const hasZ = allPts.some(p => p.z !== 0);
+  const layers = [...new Set(parsedPolygons.map(p => p.layer))];
+
+  document.getElementById('statGrid').innerHTML = `
+    <div class="stat"><div class="stat-label">Polygons</div><div class="stat-value">${parsedPolygons.length}</div></div>
+    <div class="stat"><div class="stat-label">Vertices</div><div class="stat-value">${totalPts}</div></div>
+    <div class="stat"><div class="stat-label">Layers</div><div class="stat-value">${layers.length}</div></div>
+  `;
+
+  // Detected badges
+  let badges = '';
+  if (detectedCRS.epsg) {
+    badges += `<div class="det-badge ok">CRS: ${detectedCRS.label}</div>`;
+  } else {
+    badges += `<div class="det-badge warn">CRS: Could not detect — select manually</div>`;
+  }
+  if (hasZ) badges += `<div class="det-badge warn">Z values present — will be flattened</div>`;
+  else badges += `<div class="det-badge ok">2D geometry</div>`;
+  if (detectedCRS.needsReproject) badges += `<div class="det-badge ok">Will reproject → WGS 84</div>`;
+
+  document.getElementById('detectedInfo').innerHTML = badges;
+}
+
+// ============================================================
+// CONVERT
+// ============================================================
+convertBtn.addEventListener('click', async () => {
+  const clientName = document.getElementById('clientName').value.trim() || 'Unknown';
+  const farmName = document.getElementById('farmName').value.trim() || 'Unknown';
+  const fieldPrefix = document.getElementById('fieldPrefix').value.trim() || 'Field';
+
+  logPanel.style.display = 'block';
+  logBody.innerHTML = '';
+  convertBtn.disabled = true;
+
+  log('Starting conversion...', 'ok');
+  log(`Found ${parsedPolygons.length} polygon(s) to convert`);
+
+  const srcCrs = document.getElementById('sourceCrs').value;
+  const effectiveCrs = srcCrs === 'auto' ? detectedCRS?.epsg : srcCrs;
+  if (!effectiveCrs) {
+    log('ERROR: No CRS detected or selected. Please choose a source CRS.', 'err');
+    convertBtn.disabled = false;
+    return;
+  }
+  log(`Source CRS: ${effectiveCrs}`);
+  log(`Target CRS: EPSG:4326 (WGS 84)`);
+
+  const allFiles = [];
+
+  for (let i = 0; i < parsedPolygons.length; i++) {
+    const poly = parsedPolygons[i];
+    const fieldName = parsedPolygons.length === 1 ? fieldPrefix : `${fieldPrefix} ${i + 1}`;
+    const safeName = fieldName.replace(/[^a-zA-Z0-9 _-]/g, '');
+
+    log(`Processing: ${fieldName} (${poly.points.length} vertices, layer: ${poly.layer})`);
+
+    try {
+      const result = writeShapefile(poly, fieldName, clientName, farmName);
+      const baseName = safeName;
+
+      allFiles.push({ name: `${baseName}.shp`, data: result.shp });
+      allFiles.push({ name: `${baseName}.shx`, data: result.shx });
+      allFiles.push({ name: `${baseName}.dbf`, data: result.dbf });
+      allFiles.push({ name: `${baseName}.prj`, data: result.prj });
+      allFiles.push({ name: `${baseName}.cpg`, data: result.cpg });
+
+      log(`  → Reprojected ${result.numPoints} points to WGS 84`, 'ok');
+      log(`  → Bbox: ${result.bbox.xmin.toFixed(6)}, ${result.bbox.ymin.toFixed(6)} to ${result.bbox.xmax.toFixed(6)}, ${result.bbox.ymax.toFixed(6)}`);
+      log(`  → Shape type: Polygon (type 5, 2D)`, 'ok');
+      log(`  → Generated: .shp .shx .dbf .prj .cpg`, 'ok');
+    } catch (err) {
+      log(`  ERROR: ${err.message}`, 'err');
+    }
+  }
+
+  if (allFiles.length === 0) {
+    log('No files generated!', 'err');
+    convertBtn.disabled = false;
+    return;
+  }
+
+  log('Creating ZIP archive...', 'ok');
+  const zip = createZip(allFiles);
+  const zipName = `${farmName.replace(/[^a-zA-Z0-9_-]/g, '_')}_boundaries.zip`;
+
+  // Download
+  const blob = new Blob([zip], { type: 'application/zip' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = zipName;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  log(`Download: ${zipName} (${(zip.length / 1024).toFixed(1)} KB)`, 'ok');
+  log('Conversion complete!', 'ok');
+  convertBtn.disabled = false;
+});
+
+function log(msg, type = '') {
+  const div = document.createElement('div');
+  div.className = `log-line ${type}`;
+  const ts = new Date().toLocaleTimeString('en-AU', { hour12: false });
+  div.innerHTML = `<span class="ts">${ts}</span>${msg}`;
+  logBody.appendChild(div);
+  logBody.scrollTop = logBody.scrollHeight;
+}
+</script>
+</body>
+</html>
